@@ -143,4 +143,41 @@ impl Workspaces {
             }
         }
     }
+
+    pub fn rotate_into_view(
+        &mut self,
+        handle: &WorkspaceHandle,
+        output: &Output,
+        state: &mut WorkspaceUpdateGuard<'_, State>,
+    ) {
+        let Some((j, row)) = self.parked.iter().enumerate().find_map(|(j, set)| {
+            set.workspaces
+                .iter()
+                .position(|w| w.handle == *handle)
+                .map(|row| (j, row))
+        }) else {
+            return;
+        };
+        let Some(i) = self.sets.get_index_of(output) else {
+            return;
+        };
+        for set in self.sets.values_mut() {
+            let _ = set.activate(row, WorkspaceDelta::new_shortcut(), state);
+        }
+        self.swap_in_row(row, Column::Live(i), Column::Parked(j), state);
+    }
+
+    pub fn parked_handle_for_surface<S>(&self, surface: &S) -> Option<WorkspaceHandle>
+    where
+        CosmicSurface: PartialEq<S>,
+    {
+        self.parked
+            .iter()
+            .flat_map(|set| set.workspaces.iter())
+            .find(|w| {
+                w.element_for_surface(surface).is_some()
+                    || w.get_fullscreen_surfaces().any(|f| f.surface == *surface)
+            })
+            .map(|w| w.handle)
+    }
 }

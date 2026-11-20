@@ -36,6 +36,20 @@ impl ToplevelManagementHandler for State {
         window: &<Self as ToplevelInfoHandler>::Window,
         seat: Option<Seat<Self>>,
     ) {
+        {
+            let mut shell = self.common.shell.write();
+            let output = seat
+                .as_ref()
+                .unwrap_or(shell.seats.last_active())
+                .active_output();
+            if let Some(handle) = shell.workspaces.parked_handle_for_surface(window) {
+                shell.workspaces.rotate_into_view(
+                    &handle,
+                    &output,
+                    &mut self.common.workspace_state.update(),
+                );
+            }
+        }
         self.unminimize(dh, window);
 
         let mut shell = self.common.shell.write();

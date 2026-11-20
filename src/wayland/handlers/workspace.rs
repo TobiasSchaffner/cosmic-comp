@@ -38,6 +38,14 @@ impl WorkspaceHandler for State {
                             &mut self.common.workspace_state.update(),
                         );
                         // TODO: move cursor?
+                    } else {
+                        // Grid mode: a parked workspace is rotated into view
+                        let output = shell.seats.last_active().active_output();
+                        shell.workspaces.rotate_into_view(
+                            &handle,
+                            &output,
+                            &mut self.common.workspace_state.update(),
+                        );
                     }
                 }
                 Request::SetTilingState { workspace, state } => {

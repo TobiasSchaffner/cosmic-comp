@@ -122,7 +122,7 @@ impl XdgActivationHandler for State {
         match context {
             ActivationContext::UrgentOnly => {
                 let shell = self.common.shell.write();
-                if let Some((workspace, _output)) = shell.workspace_for_surface(&surface) {
+                if let Some(workspace) = workspace_of(&shell, &surface) {
                     let mut workspace_guard = self.common.workspace_state.update();
                     workspace_guard.add_workspace_state(&workspace, WState::Urgent);
                 }
@@ -138,8 +138,7 @@ impl XdgActivationHandler for State {
                     ActivationPolicy::FocusIfActiveWorkspace => {
                         let shell = self.common.shell.write();
 
-                        let Some((target_workspace, _)) = shell.workspace_for_surface(&surface)
-                        else {
+                        let Some(target_workspace) = workspace_of(&shell, &surface) else {
                             return;
                         };
 
@@ -160,7 +159,7 @@ impl XdgActivationHandler for State {
                     }
                     ActivationPolicy::Urgent => {
                         let shell = self.common.shell.write();
-                        if let Some((workspace, _output)) = shell.workspace_for_surface(&surface) {
+                        if let Some(workspace) = workspace_of(&shell, &surface) {
                             let mut workspace_guard = self.common.workspace_state.update();
                             workspace_guard.add_workspace_state(&workspace, WState::Urgent);
                         }
@@ -169,6 +168,13 @@ impl XdgActivationHandler for State {
             }
         }
     }
+}
+
+fn workspace_of(shell: &Shell, surface: &WlSurface) -> Option<WorkspaceHandle> {
+    shell
+        .workspace_for_surface(surface)
+        .map(|(workspace, _)| workspace)
+        .or_else(|| shell.workspaces.parked_handle_for_surface(surface))
 }
 
 impl State {
@@ -181,6 +187,14 @@ impl State {
 
         let seat = shell.seats.last_active().clone();
         let current_output = seat.active_output();
+
+        if let Some(handle) = shell.workspaces.parked_handle_for_surface(surface) {
+            shell.workspaces.rotate_into_view(
+                &handle,
+                &current_output,
+                &mut self.common.workspace_state.update(),
+            );
+        }
 
         if let Some(element) = shell.element_for_surface(surface).cloned() {
             if element.is_minimized() {
