@@ -100,6 +100,7 @@ use crate::{
 pub mod element;
 pub mod focus;
 pub mod grabs;
+mod grid;
 pub mod layout;
 mod seats;
 mod workspace;
@@ -665,7 +666,6 @@ impl WorkspaceSet {
         self.workspaces.push(workspace);
     }
 
-    /// Move the non-removable `workspaces` of a removed set into this set.
     fn absorb_workspaces(
         &mut self,
         workspaces: Vec<Workspace>,
@@ -679,6 +679,7 @@ impl WorkspaceSet {
             } else {
                 // update workspace protocol state
                 workspace_state.remove_workspace_state(&workspace.handle, WState::Active);
+                workspace_state.remove_workspace_state(&workspace.handle, WState::Hidden);
                 workspace_state.move_workspace_to_group(self.group, workspace.handle);
 
                 // update mapping
@@ -892,6 +893,7 @@ impl WorkspaceSet {
 pub struct Workspaces {
     pub sets: IndexMap<Output, WorkspaceSet>,
     backup_set: Option<WorkspaceSet>,
+    parked: Vec<WorkspaceSet>,
     pub layout: WorkspaceLayout,
     mode: WorkspaceMode,
     autotile: bool,
@@ -907,6 +909,7 @@ impl Workspaces {
         Workspaces {
             sets: IndexMap::new(),
             backup_set: None,
+            parked: Vec::new(),
             layout: config.cosmic_conf.workspaces.workspace_layout,
             mode: config.cosmic_conf.workspaces.workspace_mode,
             autotile: config.cosmic_conf.autotile,
@@ -958,23 +961,42 @@ impl Workspaces {
             set.workspaces.push(workspace);
         }
 
-        // Remove workspaces that prefer this output from other sets
-        let mut moved_workspaces = self
-            .sets
-            .values_mut()
-            .flat_map(|other_set| {
-                other_set.remove_workspaces(workspace_state, |w| w.prefers_output(output))
-            })
-            .collect::<Vec<_>>();
+        let grid = self.mode == WorkspaceMode::Grid;
+        // Grid mode restores columns in `fill_empty_columns` instead
+        if !grid {
+            // Remove workspaces that prefer this output from other sets
+            let mut moved_workspaces = self
+                .sets
+                .values_mut()
+                .flat_map(|other_set| {
+                    other_set.remove_workspaces(workspace_state, |w| w.prefers_output(output))
+                })
+                .collect::<Vec<_>>();
 
-        // Add `moved_workspaces` to set, and update output and index of workspaces
-        for workspace in &mut moved_workspaces {
-            workspace_state.remove_workspace_state(&workspace.handle, WState::Active);
-            workspace_state.move_workspace_to_group(set.group, workspace.handle);
+            // Add `moved_workspaces` to set, and update output and index of workspaces
+            for workspace in &mut moved_workspaces {
+                workspace_state.remove_workspace_state(&workspace.handle, WState::Active);
+                workspace_state.move_workspace_to_group(set.group, workspace.handle);
+            }
+            set.workspaces.extend(moved_workspaces);
         }
-        set.workspaces.extend(moved_workspaces);
         if set.workspaces.is_empty() {
             set.add_empty_workspace(workspace_state);
+        }
+        if grid {
+            let rows = self
+                .sets
+                .values()
+                .chain(self.parked.iter())
+                .map(|s| s.workspaces.len())
+                .max()
+                .unwrap_or(0);
+            while set.workspaces.len() < rows {
+                set.add_empty_workspace(workspace_state);
+            }
+            if let Some(first) = self.sets.values().next() {
+                set.active = first.active;
+            }
         }
         set.update_workspace_idxs(workspace_state);
         for (i, workspace) in set.workspaces.iter_mut().enumerate() {
@@ -985,6 +1007,9 @@ impl Workspaces {
             }
         }
         self.sets.insert(output.clone(), set);
+        if grid {
+            self.fill_empty_columns(workspace_state);
+        }
     }
 
     pub fn remove_output<'a>(
@@ -998,7 +1023,7 @@ impl Workspaces {
             return;
         }
 
-        if let Some(set) = self.sets.shift_remove(output) {
+        if let Some(mut set) = self.sets.shift_remove(output) {
             {
                 let map = layer_map_for_output(output);
                 for surface in map.layers() {
@@ -1022,12 +1047,20 @@ impl Workspaces {
 
                 let new_set = self.sets.get_mut(&new_output).unwrap();
                 let workspace_group = new_set.group;
-                new_set.absorb_workspaces(
-                    set.workspaces,
-                    set.active,
-                    workspace_state,
-                    xdg_activation_state,
-                );
+                if self.mode == WorkspaceMode::Grid {
+                    // Park the column, its workspaces keep their rows
+                    for workspace in &set.workspaces {
+                        workspace_state.remove_workspace_state(&workspace.handle, WState::Active);
+                        workspace_state.add_workspace_state(&workspace.handle, WState::Hidden);
+                    }
+                } else {
+                    new_set.absorb_workspaces(
+                        std::mem::take(&mut set.workspaces),
+                        set.active,
+                        workspace_state,
+                        xdg_activation_state,
+                    );
+                }
 
                 for window in set.sticky_layer.mapped() {
                     for (surface, _) in window.windows() {
@@ -1035,19 +1068,30 @@ impl Workspaces {
                         toplevel_enter_output(&surface, &new_output);
                     }
                 }
-                new_set.sticky_layer.merge(set.sticky_layer);
+                new_set.sticky_layer.merge(std::mem::replace(
+                    &mut set.sticky_layer,
+                    FloatingLayout::new(self.theme.clone(), self.appearance, output),
+                ));
                 for window in set.minimized_windows.iter() {
                     for surface in window.windows() {
                         toplevel_leave_output(&surface, output);
                         toplevel_enter_output(&surface, &new_output);
                     }
                 }
-                new_set.minimized_windows.extend(set.minimized_windows);
+                new_set
+                    .minimized_windows
+                    .extend(std::mem::take(&mut set.minimized_windows));
 
-                if self.mode == WorkspaceMode::OutputBound {
-                    workspace_state.remove_workspace_group(set.group);
-                } else {
-                    workspace_state.remove_group_output(&workspace_group, output);
+                match self.mode {
+                    WorkspaceMode::OutputBound => workspace_state.remove_workspace_group(set.group),
+                    WorkspaceMode::Global => {
+                        workspace_state.remove_group_output(&workspace_group, output)
+                    }
+                    WorkspaceMode::Grid => {
+                        workspace_state.remove_group_output(&set.group, output);
+                        set.previously_active = None;
+                        self.parked.push(set);
+                    }
                 }
             } else {
                 workspace_state.remove_group_output(&set.group, output);
@@ -1174,7 +1218,7 @@ impl Workspaces {
                     .unwrap();
 
                 // Move workspace at given index on every output
-                for set in self.sets.values_mut() {
+                for set in self.sets.values_mut().chain(self.parked.iter_mut()) {
                     if old_idx < set.workspaces.len() && other_idx < set.workspaces.len() {
                         let previous_active_handle = set.workspaces[set.active].handle;
 
@@ -1210,13 +1254,17 @@ impl Workspaces {
         self.layout = config.cosmic_conf.workspaces.workspace_layout;
         self.appearance = config.cosmic_conf.appearance_settings;
 
-        for set in self.sets.values_mut() {
+        for set in self.sets.values_mut().chain(self.parked.iter_mut()) {
             set.appearance = self.appearance;
             set.sticky_layer.appearance = self.appearance;
             for workspace in set.workspaces.iter_mut() {
                 workspace.floating_layer.appearance = self.appearance;
                 workspace.tiling_layer.appearance = self.appearance;
             }
+        }
+
+        if self.mode != WorkspaceMode::Grid {
+            self.unpark_all(workspace_state, xdg_activation_state);
         }
 
         if self.sets.len() <= 1 {
@@ -1295,10 +1343,16 @@ impl Workspaces {
                 let Some(max) = self.sets.values().map(|set| set.workspaces.len()).max() else {
                     return;
                 };
+                let max = self
+                    .parked
+                    .iter()
+                    .map(|set| set.workspaces.len())
+                    .fold(max, usize::max);
 
                 for set in self
                     .sets
                     .values_mut()
+                    .chain(self.parked.iter_mut())
                     .filter(|set| set.workspaces.len() < max)
                 {
                     while set.workspaces.len() < max {
@@ -1310,10 +1364,11 @@ impl Workspaces {
                 if self
                     .sets
                     .values()
+                    .chain(&self.parked)
                     .flat_map(|set| set.workspaces.last())
                     .any(|w| !w.is_empty() || w.pinned)
                 {
-                    for set in self.sets.values_mut() {
+                    for set in self.sets.values_mut().chain(self.parked.iter_mut()) {
                         set.add_empty_workspace(workspace_state);
                     }
                 }
@@ -1328,30 +1383,56 @@ impl Workspaces {
                     let has_windows = self
                         .sets
                         .values()
+                        .chain(&self.parked)
                         .any(|s| !s.workspaces[i].can_auto_remove(xdg_activation_state));
 
                     if !has_windows && i != active && i != len - 1 {
-                        for workspace in self.sets.values().map(|s| &s.workspaces[i]) {
+                        for workspace in self
+                            .sets
+                            .values()
+                            .chain(&self.parked)
+                            .map(|s| &s.workspaces[i])
+                        {
                             workspace_state.remove_workspace(workspace.handle);
                         }
                         keep[i] = false;
                     }
                 }
 
-                self.sets.values_mut().for_each(|s| {
-                    let mut iter = keep.iter();
-                    s.workspaces.retain(|_| *iter.next().unwrap());
-                });
+                self.sets
+                    .values_mut()
+                    .chain(self.parked.iter_mut())
+                    .for_each(|s| {
+                        let mut iter = keep.iter();
+                        s.workspaces.retain(|_| *iter.next().unwrap());
+                    });
                 active -= keep.iter().take(active + 1).filter(|keep| !**keep).count();
-                self.sets.values_mut().for_each(|s| {
-                    s.active = active;
-                });
+                self.sets
+                    .values_mut()
+                    .chain(self.parked.iter_mut())
+                    .for_each(|s| {
+                        s.active = active;
+                    });
 
                 if keep.iter().any(|val| !(*val)) {
-                    for set in self.sets.values_mut() {
+                    for set in self.sets.values_mut().chain(self.parked.iter_mut()) {
                         set.update_workspace_idxs(workspace_state);
                     }
                 }
+
+                for workspace in self.parked.iter().flat_map(|s| s.workspaces.iter()) {
+                    workspace_state.add_workspace_state(&workspace.handle, WState::Hidden);
+                }
+                self.parked.retain(|set| {
+                    let keep = set
+                        .workspaces
+                        .iter()
+                        .any(|w| !w.can_auto_remove(xdg_activation_state));
+                    if !keep {
+                        workspace_state.remove_workspace_group(set.group);
+                    }
+                    keep
+                });
             }
             WorkspaceMode::OutputBound => {
                 for set in self.sets.values_mut() {
@@ -1455,7 +1536,7 @@ impl Workspaces {
     }
 
     pub fn set_theme(&mut self, theme: cosmic::Theme) {
-        for (_, s) in &mut self.sets {
+        for s in self.sets.values_mut().chain(self.parked.iter_mut()) {
             s.theme = theme.clone();
 
             s.sticky_layer.theme = theme.clone();
@@ -1511,7 +1592,7 @@ impl Workspaces {
         seats: impl Iterator<Item = &'a Seat<State>>,
     ) {
         let seats = seats.cloned().collect::<Vec<_>>();
-        for (_, set) in &mut self.sets {
+        for set in self.sets.values_mut().chain(self.parked.iter_mut()) {
             set.tiling_enabled = self.autotile;
 
             if matches!(self.autotile_behavior, TileBehavior::Global) {
@@ -1542,6 +1623,7 @@ impl Workspaces {
         let pinned_workspaces: Vec<PinnedWorkspace> = self
             .sets
             .values()
+            .chain(&self.parked)
             .flat_map(|set| &set.workspaces)
             .flat_map(|w| w.to_pinned())
             .collect();
@@ -3276,6 +3358,7 @@ impl Shell {
             .sets
             .values_mut()
             .chain(self.workspaces.backup_set.as_mut())
+            .chain(self.workspaces.parked.iter_mut())
         {
             let sticky_res = set.sticky_layer.mapped().find_map(|m| {
                 m.windows()

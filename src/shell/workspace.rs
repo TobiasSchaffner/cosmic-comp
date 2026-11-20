@@ -634,14 +634,24 @@ impl Workspace {
         self.output = output.clone();
     }
 
-    pub fn prefers_output(&self, output: &Output) -> bool {
+    pub fn last_shown_on(&self, output: &Output) -> bool {
+        self.output_stack
+            .back()
+            .is_some_and(|i| self.matches_output(i, output))
+    }
+
+    fn matches_output(&self, output_match: &OutputMatch, output: &Output) -> bool {
         // Disambiguate match by connector name if existing output has same edid
         let disambiguate = output
             .edid()
             .is_some_and(|edid| self.output().edid() == Some(edid));
+        output_matches(output_match, output, disambiguate)
+    }
+
+    pub fn prefers_output(&self, output: &Output) -> bool {
         self.output_stack
             .iter()
-            .any(|i| output_matches(i, output, disambiguate))
+            .any(|i| self.matches_output(i, output))
     }
 
     pub fn unmap_element(&mut self, mapped: &CosmicMapped) -> Option<WorkspaceRestoreData> {
