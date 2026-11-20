@@ -640,6 +640,10 @@ impl Workspace {
             .is_some_and(|i| self.matches_output(i, output))
     }
 
+    pub fn belongs_to(&self, output: &Output) -> bool {
+        self.matches_output(self.explicit_output(), output)
+    }
+
     fn matches_output(&self, output_match: &OutputMatch, output: &Output) -> bool {
         // Disambiguate match by connector name if existing output has same edid
         let disambiguate = output

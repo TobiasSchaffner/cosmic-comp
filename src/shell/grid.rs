@@ -182,6 +182,12 @@ impl Workspaces {
                         .is_some_and(|w| holds_content(w) && w.last_shown_on(&output))
                 }) {
                     self.swap_in_row(row, Column::Live(i), Column::Parked(j), state);
+                } else if let Some(j) = self.sets.values().position(|set| {
+                    set.workspaces.get(row).is_some_and(|w| {
+                        w.pinned && w.belongs_to(&output) && !w.belongs_to(&set.output)
+                    })
+                }) {
+                    self.swap_in_row(row, Column::Live(i), Column::Live(j), state);
                 }
             }
         }
