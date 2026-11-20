@@ -219,6 +219,12 @@ impl State {
                             && self.common.config.cosmic_conf.workspaces.workspace_layout
                                 == WorkspaceLayout::Horizontal))
                 {
+                    // Grid mode rotates the active row instead
+                    self.common
+                        .shell
+                        .write()
+                        .workspaces
+                        .rotate_row(false, &mut self.common.workspace_state.update());
                     return;
                 }
 
@@ -259,6 +265,12 @@ impl State {
                             && self.common.config.cosmic_conf.workspaces.workspace_layout
                                 == WorkspaceLayout::Horizontal))
                 {
+                    // Grid mode rotates the active row instead
+                    self.common
+                        .shell
+                        .write()
+                        .workspaces
+                        .rotate_row(true, &mut self.common.workspace_state.update());
                     return;
                 }
 

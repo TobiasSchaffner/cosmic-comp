@@ -73,8 +73,55 @@ impl Workspaces {
                 live.place_in_row(row, true, state);
                 parked.place_in_row(row, false, state);
             }
-            // live <-> live and parked <-> parked are never needed
+            (Column::Live(i), Column::Live(j)) if i != j => {
+                let [(_, x), (_, y)] = self.sets.get_disjoint_indices_mut([i, j]).unwrap();
+                std::mem::swap(&mut x.workspaces[row], &mut y.workspaces[row]);
+                x.place_in_row(row, true, state);
+                y.place_in_row(row, true, state);
+            }
+            // same column, or parked <-> parked (never needed)
             _ => {}
+        }
+    }
+
+    fn grid_ring(&self, row: usize) -> Vec<Column> {
+        self.spatial_order()
+            .into_iter()
+            .map(Column::Live)
+            .chain(
+                self.parked
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, set)| set.workspaces.get(row).is_some_and(holds_content))
+                    .map(|(j, _)| Column::Parked(j)),
+            )
+            .collect()
+    }
+
+    fn spatial_order(&self) -> Vec<usize> {
+        let mut live = (0..self.sets.len()).collect::<Vec<_>>();
+        live.sort_by_key(|&i| {
+            let loc = self.sets[i].output.geometry().loc;
+            (loc.x, loc.y)
+        });
+        live
+    }
+
+    pub fn rotate_row(&mut self, forward: bool, state: &mut WorkspaceUpdateGuard<'_, State>) {
+        let Some((_, first)) = self.sets.first() else {
+            return;
+        };
+        if self.mode != WorkspaceMode::Grid {
+            return;
+        }
+        let row = first.active;
+        let ring = self.grid_ring(row);
+        if ring.len() < 2 {
+            return;
+        }
+        for k in 1..ring.len() {
+            let i = if forward { ring.len() - k } else { k };
+            self.swap_in_row(row, ring[0], ring[i], state);
         }
     }
 
