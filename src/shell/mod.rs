@@ -1053,7 +1053,7 @@ impl Workspaces {
         workspace_state: &mut WorkspaceUpdateGuard<'_, State>,
     ) {
         // If workspaces span across outputs, they can't be moved to a different output
-        if self.mode == WorkspaceMode::Global {
+        if self.mode != WorkspaceMode::OutputBound {
             return;
         }
 
@@ -1144,7 +1144,7 @@ impl Workspaces {
 
                 new_set.update_workspace_idxs(workspace_state);
             }
-            WorkspaceMode::Global => {
+            WorkspaceMode::Global | WorkspaceMode::Grid => {
                 let old_set = &mut self.sets[&old_output];
                 let old_idx = old_set
                     .workspaces
@@ -1210,10 +1210,10 @@ impl Workspaces {
         }
 
         match (old_mode, self.mode) {
-            (WorkspaceMode::Global, WorkspaceMode::OutputBound) => {
+            (WorkspaceMode::Global | WorkspaceMode::Grid, WorkspaceMode::OutputBound) => {
                 // We basically just unlink the existing spaces, so nothing needs to be updated
             }
-            (WorkspaceMode::OutputBound, WorkspaceMode::Global) => {
+            (WorkspaceMode::OutputBound, WorkspaceMode::Global | WorkspaceMode::Grid) => {
                 // lets construct an iterator of all the pairs of workspaces we have to "merge"
                 let mut pairs = Vec::new();
                 if let Some(max) = self.sets.values().map(|set| set.workspaces.len()).max() {
@@ -1277,7 +1277,7 @@ impl Workspaces {
         xdg_activation_state: &XdgActivationState,
     ) {
         match self.mode {
-            WorkspaceMode::Global => {
+            WorkspaceMode::Global | WorkspaceMode::Grid => {
                 let Some(max) = self.sets.values().map(|set| set.workspaces.len()).max() else {
                     return;
                 };
@@ -1790,7 +1790,7 @@ impl Shell {
                     Err(InvalidWorkspaceIndex)
                 }
             }
-            WorkspaceMode::Global => {
+            WorkspaceMode::Global | WorkspaceMode::Grid => {
                 for set in self.workspaces.sets.values_mut() {
                     set.activate(idx, workspace_delta, workspace_state)?;
                 }
@@ -1807,7 +1807,7 @@ impl Shell {
                     set.update_workspace_delta(delta, forward);
                 }
             }
-            WorkspaceMode::Global => {
+            WorkspaceMode::Global | WorkspaceMode::Grid => {
                 for set in self.workspaces.sets.values_mut() {
                     set.update_workspace_delta(delta, forward);
                 }
@@ -1872,7 +1872,7 @@ impl Shell {
                     Err(InvalidWorkspaceIndex)
                 }
             }
-            WorkspaceMode::Global => {
+            WorkspaceMode::Global | WorkspaceMode::Grid => {
                 for set in self.workspaces.sets.values_mut() {
                     if let Some((
                         _,

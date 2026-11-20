@@ -35,6 +35,7 @@ pub enum WorkspaceMode {
     #[default]
     OutputBound,
     Global,
+    Grid,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
