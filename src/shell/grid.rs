@@ -14,6 +14,23 @@ fn empty_at(set: &WorkspaceSet, row: usize) -> bool {
     set.workspaces.get(row).is_some_and(|w| !holds_content(w))
 }
 
+// Swaps that move the column shown on set `old[k]` to set `new[k]`
+fn column_swaps(old: &[usize], new: &[usize]) -> Vec<(usize, usize)> {
+    let mut holder = old.to_vec();
+    let mut swaps = Vec::new();
+    for k in 0..new.len() {
+        let (from, to) = (holder[k], new[k]);
+        if from != to {
+            if let Some(m) = holder.iter().position(|&h| h == to) {
+                holder[m] = from;
+            }
+            holder[k] = to;
+            swaps.push((from, to));
+        }
+    }
+    swaps
+}
+
 impl WorkspaceSet {
     fn place_in_row(
         &mut self,
@@ -105,6 +122,32 @@ impl Workspaces {
             (loc.x, loc.y)
         });
         live
+    }
+
+    pub fn sync_grid_order(&mut self, state: &mut WorkspaceUpdateGuard<'_, State>) {
+        let order = self.spatial_order();
+        if self.mode == WorkspaceMode::Grid {
+            let old = self
+                .grid_order
+                .iter()
+                .filter_map(|o| self.sets.get_index_of(o))
+                .collect::<Vec<_>>();
+            let new = order
+                .iter()
+                .copied()
+                .filter(|i| self.grid_order.contains(self.sets.get_index(*i).unwrap().0))
+                .collect::<Vec<_>>();
+            let rows = self.sets.first().map_or(0, |(_, s)| s.workspaces.len());
+            for (a, b) in column_swaps(&old, &new) {
+                for row in 0..rows {
+                    self.swap_in_row(row, Column::Live(a), Column::Live(b), state);
+                }
+            }
+        }
+        self.grid_order = order
+            .into_iter()
+            .map(|i| self.sets.get_index(i).unwrap().0.clone())
+            .collect();
     }
 
     pub fn rotate_row(&mut self, forward: bool, state: &mut WorkspaceUpdateGuard<'_, State>) {

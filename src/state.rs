@@ -603,6 +603,7 @@ impl LockedBackend<'_> {
             layer_map_for_output(output).arrange();
         }
 
+        shell_ref.workspaces.sync_grid_order(workspace_state);
         // Update layout for changes in resolution, scale, orientation
         shell_ref.workspaces.recalculate();
         let active_outputs = shell_ref.outputs().cloned().collect::<Vec<_>>();
