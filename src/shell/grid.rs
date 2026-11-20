@@ -162,9 +162,39 @@ impl Workspaces {
         if ring.len() < 2 {
             return;
         }
+        let shown = self
+            .sets
+            .values()
+            .map(|set| set.workspaces[row].handle)
+            .collect::<Vec<_>>();
         for k in 1..ring.len() {
             let i = if forward { ring.len() - k } else { k };
             self.swap_in_row(row, ring[0], ring[i], state);
+        }
+        // No slide across scales: the outgoing workspace is drawn at its new output's scale
+        let scale = |output: &Output| output.current_scale().fractional_scale();
+        let slide = self
+            .sets
+            .values()
+            .zip(&shown)
+            .map(|(set, from)| {
+                set.animate()
+                    && set.workspaces[row].handle != *from
+                    && self
+                        .shown_space_for_handle(from)
+                        .is_some_and(|w| scale(w.output()) == scale(&set.output))
+            })
+            .collect::<Vec<_>>();
+        let start = Instant::now();
+        for ((set, from), slide) in self.sets.values_mut().zip(shown).zip(slide) {
+            set.previously_active = slide.then_some((
+                row,
+                WorkspaceDelta::Rotate {
+                    start,
+                    forward,
+                    from,
+                },
+            ));
         }
     }
 

@@ -233,24 +233,24 @@ fn render_input_order_internal<R: 'static>(
 
     let (previous, current_offset) = match previous.as_ref() {
         Some((previous, previous_idx, start)) => {
-            let layout = shell.workspaces.layout;
+            let mut layout = shell.workspaces.layout;
 
-            let Some(workspace) = shell.workspaces.space_for_handle(previous) else {
+            let Some(workspace) = shell.workspaces.shown_space_for_handle(previous) else {
                 return ControlFlow::Break(Err(OutputNoMode));
             };
             let has_fullscreen = workspace.get_fullscreen(seat).is_some();
 
+            let eased = |t: &Instant| {
+                ease(
+                    EaseInOutCubic,
+                    0.0,
+                    1.0,
+                    Instant::now().duration_since(*t).as_millis() as f32
+                        / ANIMATION_DURATION.as_millis() as f32,
+                )
+            };
             let (forward, percentage) = match start {
-                WorkspaceDelta::Shortcut(st) => (
-                    *previous_idx < current.1,
-                    ease(
-                        EaseInOutCubic,
-                        0.0,
-                        1.0,
-                        Instant::now().duration_since(*st).as_millis() as f32
-                            / ANIMATION_DURATION.as_millis() as f32,
-                    ),
-                ),
+                WorkspaceDelta::Shortcut(st) => (*previous_idx < current.1, eased(st)),
                 WorkspaceDelta::Gesture {
                     percentage: prog,
                     forward,
@@ -263,6 +263,14 @@ fn render_input_order_internal<R: 'static>(
                     *forward,
                     (spring.value_at(Instant::now().duration_since(*start)) as f32).clamp(0.0, 1.0),
                 ),
+                WorkspaceDelta::Rotate { start, forward, .. } => {
+                    // a rotation moves across the row axis
+                    layout = match layout {
+                        WorkspaceLayout::Vertical => WorkspaceLayout::Horizontal,
+                        WorkspaceLayout::Horizontal => WorkspaceLayout::Vertical,
+                    };
+                    (*forward, eased(start))
+                }
             };
 
             let offset = Point::<i32, Logical>::from(match (layout, forward) {
@@ -332,7 +340,7 @@ fn render_input_order_internal<R: 'static>(
     if element_filter != ElementFilter::LayerShellOnly {
         // previous workspace popups
         if let Some((previous_handle, _, _, offset)) = previous.as_ref() {
-            let Some(workspace) = shell.workspaces.space_for_handle(previous_handle) else {
+            let Some(workspace) = shell.workspaces.shown_space_for_handle(previous_handle) else {
                 return ControlFlow::Break(Err(OutputNoMode));
             };
 
@@ -430,7 +438,7 @@ fn render_input_order_internal<R: 'static>(
 
         // previous workspace windows
         if let Some((previous_handle, _, _, offset)) = previous.as_ref() {
-            let Some(workspace) = shell.workspaces.space_for_handle(previous_handle) else {
+            let Some(workspace) = shell.workspaces.shown_space_for_handle(previous_handle) else {
                 return ControlFlow::Break(Err(OutputNoMode));
             };
             callback(Stage::Workspace {

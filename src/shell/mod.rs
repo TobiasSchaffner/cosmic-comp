@@ -345,6 +345,11 @@ pub enum WorkspaceDelta {
         spring: Spring,
         forward: bool,
     },
+    Rotate {
+        start: Instant,
+        forward: bool,
+        from: WorkspaceHandle,
+    },
     // InvalidGesture(f64), TODO
     // InvalidGestureEnd(Instant, Spring), TODO
 }
@@ -378,7 +383,9 @@ impl WorkspaceDelta {
     pub fn is_animating(&self) -> bool {
         matches!(
             self,
-            WorkspaceDelta::Shortcut(_) | WorkspaceDelta::GestureEnd { .. }
+            WorkspaceDelta::Shortcut(_)
+                | WorkspaceDelta::GestureEnd { .. }
+                | WorkspaceDelta::Rotate { .. }
         )
     }
 }
@@ -549,11 +556,7 @@ impl WorkspaceSet {
             return Err(InvalidWorkspaceIndex);
         }
 
-        // Animate if workspaces overview isn't open
-        let layer_map = layer_map_for_output(&self.output);
-        let animate = !layer_map
-            .layers()
-            .any(|l| l.namespace() == WORKSPACE_OVERVIEW_NAMESPACE);
+        let animate = self.animate();
 
         if self.active != idx {
             let old_active = self.active;
@@ -582,6 +585,13 @@ impl WorkspaceSet {
             }
             Ok(false)
         }
+    }
+
+    // Animate if workspaces overview isn't open
+    fn animate(&self) -> bool {
+        !layer_map_for_output(&self.output)
+            .layers()
+            .any(|l| l.namespace() == WORKSPACE_OVERVIEW_NAMESPACE)
     }
 
     fn activate_previous(
@@ -623,7 +633,7 @@ impl WorkspaceSet {
     fn refresh(&mut self) {
         if let Some((_, start)) = self.previously_active {
             match start {
-                WorkspaceDelta::Shortcut(st) => {
+                WorkspaceDelta::Shortcut(st) | WorkspaceDelta::Rotate { start: st, .. } => {
                     if Instant::now().duration_since(st).as_millis() as f32
                         >= ANIMATION_DURATION.as_millis() as f32
                     {
@@ -1425,16 +1435,23 @@ impl Workspaces {
                 for workspace in self.parked.iter().flat_map(|s| s.workspaces.iter()) {
                     workspace_state.add_workspace_state(&workspace.handle, WState::Hidden);
                 }
-                self.parked.retain(|set| {
-                    let keep = set
-                        .workspaces
-                        .iter()
-                        .any(|w| !w.can_auto_remove(xdg_activation_state));
-                    if !keep {
-                        workspace_state.remove_workspace_group(set.group);
-                    }
-                    keep
-                });
+                // A rotation slide may still draw a parked workspace
+                if self
+                    .sets
+                    .values()
+                    .all(|set| set.previously_active.is_none())
+                {
+                    self.parked.retain(|set| {
+                        let keep = set
+                            .workspaces
+                            .iter()
+                            .any(|w| !w.can_auto_remove(xdg_activation_state));
+                        if !keep {
+                            workspace_state.remove_workspace_group(set.group);
+                        }
+                        keep
+                    });
+                }
             }
             WorkspaceMode::OutputBound => {
                 for set in self.sets.values_mut() {
@@ -1470,7 +1487,13 @@ impl Workspaces {
             .map(|set| {
                 (
                     set.previously_active.and_then(|(idx, start)| {
-                        set.workspaces.get(idx).map(|previous| (previous, start))
+                        match start {
+                            WorkspaceDelta::Rotate { from, .. } => {
+                                self.shown_space_for_handle(&from)
+                            }
+                            _ => set.workspaces.get(idx),
+                        }
+                        .map(|previous| (previous, start))
                     }),
                     &set.workspaces[set.active],
                 )
@@ -1516,6 +1539,16 @@ impl Workspaces {
 
     pub fn space_for_handle(&self, handle: &WorkspaceHandle) -> Option<&Workspace> {
         self.spaces().find(|w| &w.handle == handle)
+    }
+
+    /// Also finds parked workspaces, only use it for drawing.
+    pub fn shown_space_for_handle(&self, handle: &WorkspaceHandle) -> Option<&Workspace> {
+        self.space_for_handle(handle).or_else(|| {
+            self.parked
+                .iter()
+                .flat_map(|set| &set.workspaces)
+                .find(|w| &w.handle == handle)
+        })
     }
 
     pub fn space_for_handle_mut(&mut self, handle: &WorkspaceHandle) -> Option<&mut Workspace> {
