@@ -665,6 +665,43 @@ impl WorkspaceSet {
         self.workspaces.push(workspace);
     }
 
+    /// Move the non-removable `workspaces` of a removed set into this set.
+    fn absorb_workspaces(
+        &mut self,
+        workspaces: Vec<Workspace>,
+        active: usize,
+        workspace_state: &mut WorkspaceUpdateGuard<'_, State>,
+        xdg_activation_state: &XdgActivationState,
+    ) {
+        for (i, mut workspace) in workspaces.into_iter().enumerate() {
+            if workspace.can_auto_remove(xdg_activation_state) {
+                workspace_state.remove_workspace(workspace.handle);
+            } else {
+                // update workspace protocol state
+                workspace_state.remove_workspace_state(&workspace.handle, WState::Active);
+                workspace_state.move_workspace_to_group(self.group, workspace.handle);
+
+                // update mapping
+                workspace.set_output(&self.output, false);
+                workspace.refresh();
+                self.workspaces.push(workspace);
+
+                // If workspace was active, and the new set's active workspace is empty, make this workspace
+                // active on the new set. Instead of leaving an empty workspace active, and a previously active
+                // workspace hidden.
+                if i == active && self.workspaces[self.active].is_empty() {
+                    workspace_state.remove_workspace_state(
+                        &self.workspaces[self.active].handle,
+                        WState::Active,
+                    );
+                    self.active = self.workspaces.len() - 1;
+                    workspace_state
+                        .add_workspace_state(&self.workspaces[self.active].handle, WState::Active);
+                }
+            }
+        }
+    }
+
     fn ensure_last_empty(
         &mut self,
         state: &mut WorkspaceUpdateGuard<State>,
@@ -985,35 +1022,12 @@ impl Workspaces {
 
                 let new_set = self.sets.get_mut(&new_output).unwrap();
                 let workspace_group = new_set.group;
-                for (i, mut workspace) in set.workspaces.into_iter().enumerate() {
-                    if workspace.can_auto_remove(xdg_activation_state) {
-                        workspace_state.remove_workspace(workspace.handle);
-                    } else {
-                        // update workspace protocol state
-                        workspace_state.remove_workspace_state(&workspace.handle, WState::Active);
-                        workspace_state.move_workspace_to_group(workspace_group, workspace.handle);
-
-                        // update mapping
-                        workspace.set_output(&new_output, false);
-                        workspace.refresh();
-                        new_set.workspaces.push(workspace);
-
-                        // If workspace was active, and the new set's active workspace is empty, make this workspace
-                        // active on the new set. Instead of leaving an empty workspace active, and a previously active
-                        // workspace hidden.
-                        if i == set.active && new_set.workspaces[new_set.active].is_empty() {
-                            workspace_state.remove_workspace_state(
-                                &new_set.workspaces[new_set.active].handle,
-                                WState::Active,
-                            );
-                            new_set.active = new_set.workspaces.len() - 1;
-                            workspace_state.add_workspace_state(
-                                &new_set.workspaces[new_set.active].handle,
-                                WState::Active,
-                            );
-                        }
-                    }
-                }
+                new_set.absorb_workspaces(
+                    set.workspaces,
+                    set.active,
+                    workspace_state,
+                    xdg_activation_state,
+                );
 
                 for window in set.sticky_layer.mapped() {
                     for (surface, _) in window.windows() {
