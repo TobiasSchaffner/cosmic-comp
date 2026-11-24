@@ -102,16 +102,23 @@ impl Workspaces {
     }
 
     fn grid_ring(&self, row: usize) -> Vec<Column> {
-        self.spatial_order()
-            .into_iter()
+        let live = self.spatial_order();
+        let empty_slot = (!live.iter().any(|&i| empty_at(&self.sets[i], row)))
+            .then(|| self.parked.iter().position(|set| empty_at(set, row)))
+            .flatten();
+        live.into_iter()
             .map(Column::Live)
             .chain(
-                self.parked
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, set)| set.workspaces.get(row).is_some_and(holds_content))
-                    .map(|(j, _)| Column::Parked(j)),
+                (0..self.parked.len())
+                    .filter(|&j| {
+                        self.parked[j]
+                            .workspaces
+                            .get(row)
+                            .is_some_and(holds_content)
+                    })
+                    .map(Column::Parked),
             )
+            .chain(empty_slot.map(Column::Parked))
             .collect()
     }
 
@@ -150,6 +157,22 @@ impl Workspaces {
             .collect();
     }
 
+    fn add_empty_column(&mut self, row: usize, state: &mut WorkspaceUpdateGuard<'_, State>) {
+        let Some((output, first)) = self.sets.first() else {
+            return;
+        };
+        let rows = first.workspaces.len();
+        let mut set = WorkspaceSet::new(state, output, self.autotile, &self.theme, self.appearance);
+        while set.workspaces.len() < rows {
+            set.add_empty_workspace(state);
+        }
+        set.active = row;
+        for workspace in &set.workspaces {
+            state.add_workspace_state(&workspace.handle, WState::Hidden);
+        }
+        self.parked.push(set);
+    }
+
     pub fn rotate_row(&mut self, forward: bool, state: &mut WorkspaceUpdateGuard<'_, State>) {
         let Some((_, first)) = self.sets.first() else {
             return;
@@ -158,6 +181,15 @@ impl Workspaces {
             return;
         }
         let row = first.active;
+        // Like the empty last row, every row can rotate an empty workspace in
+        if !self
+            .sets
+            .values()
+            .chain(&self.parked)
+            .any(|set| empty_at(set, row))
+        {
+            self.add_empty_column(row, state);
+        }
         let ring = self.grid_ring(row);
         if ring.len() < 2 {
             return;
