@@ -220,6 +220,22 @@ impl Workspaces {
                     self.swap_in_row(row, Column::Live(i), Column::Live(j), state);
                 }
             }
+            let empty = self
+                .spatial_order()
+                .into_iter()
+                .filter(|&i| empty_at(&self.sets[i], row))
+                .collect::<Vec<_>>();
+            let filled = (0..self.parked.len())
+                .filter(|&j| {
+                    self.parked[j]
+                        .workspaces
+                        .get(row)
+                        .is_some_and(holds_content)
+                })
+                .collect::<Vec<_>>();
+            for (i, j) in empty.into_iter().zip(filled) {
+                self.swap_in_row(row, Column::Live(i), Column::Parked(j), state);
+            }
         }
     }
 

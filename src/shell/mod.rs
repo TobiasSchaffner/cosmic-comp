@@ -1103,6 +1103,7 @@ impl Workspaces {
                         workspace_state.remove_group_output(&set.group, output);
                         set.previously_active = None;
                         self.parked.push(set);
+                        self.fill_empty_columns(workspace_state);
                     }
                 }
             } else {
